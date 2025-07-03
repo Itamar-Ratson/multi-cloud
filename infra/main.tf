@@ -1,6 +1,5 @@
 # main.tf
 # Multi-cloud Kubernetes infrastructure with Istio service mesh
-# FIXED: Correct Azure AKS module output attributes
 
 # AWS Provider
 provider "aws" {
@@ -78,24 +77,23 @@ resource "azurerm_resource_group" "main" {
   }
 }
 
-# Azure AKS Module
-module "azure_aks" {
-  source  = "Azure/aks/azurerm"
-  version = "~> 7.0"
-
+# Azure AKS - Simple direct resource (no module)
+resource "azurerm_kubernetes_cluster" "azure_aks" {
+  name                = "multicloud-azure"
+  location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
-  location           = azurerm_resource_group.main.location
-  cluster_name       = "multicloud-azure"
+  dns_prefix          = "multicloud-azure"
+  kubernetes_version  = coalesce(var.azure_cluster_version, var.cluster_version)
 
-  kubernetes_version   = coalesce(var.azure_cluster_version, var.cluster_version)
-  orchestrator_version = coalesce(var.azure_cluster_version, var.cluster_version)
+  default_node_pool {
+    name       = "default"
+    node_count = var.node_count
+    vm_size    = var.azure_node_vm_size
+  }
 
-  # Default node pool configuration using agents_* parameters
-  agents_count     = var.node_count
-  agents_size      = var.azure_node_vm_size
-  agents_pool_name = "default"
-  
-  enable_auto_scaling = false
+  identity {
+    type = "SystemAssigned"
+  }
 
   tags = {
     Environment = var.environment
@@ -118,10 +116,10 @@ provider "kubernetes" {
 # Kubernetes provider for Azure AKS - FIXED
 provider "kubernetes" {
   alias                  = "azure"
-  host                   = module.azure_aks.host
-  cluster_ca_certificate = base64decode(module.azure_aks.cluster_ca_certificate)
-  client_certificate     = base64decode(module.azure_aks.client_certificate)
-  client_key             = base64decode(module.azure_aks.client_key)
+  host                   = azurerm_kubernetes_cluster.azure_aks.kube_config.0.host
+  cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.azure_aks.kube_config.0.cluster_ca_certificate)
+  client_certificate     = base64decode(azurerm_kubernetes_cluster.azure_aks.kube_config.0.client_certificate)
+  client_key             = base64decode(azurerm_kubernetes_cluster.azure_aks.kube_config.0.client_key)
 }
 
 # Helm provider for AWS EKS
@@ -143,10 +141,10 @@ provider "helm" {
 provider "helm" {
   alias = "azure"
   kubernetes {
-    host                   = module.azure_aks.host
-    cluster_ca_certificate = base64decode(module.azure_aks.cluster_ca_certificate)
-    client_certificate     = base64decode(module.azure_aks.client_certificate)
-    client_key             = base64decode(module.azure_aks.client_key)
+    host                   = azurerm_kubernetes_cluster.azure_aks.kube_config.0.host
+    cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.azure_aks.kube_config.0.cluster_ca_certificate)
+    client_certificate     = base64decode(azurerm_kubernetes_cluster.azure_aks.kube_config.0.client_certificate)
+    client_key             = base64decode(azurerm_kubernetes_cluster.azure_aks.kube_config.0.client_key)
   }
 }
 
@@ -355,14 +353,14 @@ resource "null_resource" "configure_kubectl_aws" {
 
 # Configure kubectl contexts automatically - FIXED
 resource "null_resource" "configure_kubectl_azure" {
-  depends_on = [module.azure_aks]
+  depends_on = [azurerm_kubernetes_cluster.azure_aks]
   
   provisioner "local-exec" {
-    command = "az aks get-credentials --resource-group ${azurerm_resource_group.main.name} --name ${module.azure_aks.aks_name} --context azure-cluster --overwrite-existing"
+    command = "az aks get-credentials --resource-group ${azurerm_resource_group.main.name} --name ${azurerm_kubernetes_cluster.azure_aks.name} --context azure-cluster --overwrite-existing"
   }
   
   triggers = {
-    cluster_name = module.azure_aks.aks_name
+    cluster_name = azurerm_kubernetes_cluster.azure_aks.name
   }
 }
 
