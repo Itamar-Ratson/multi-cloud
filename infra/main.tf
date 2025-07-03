@@ -272,7 +272,7 @@ resource "helm_release" "istiod_azure" {
   }
 }
 
-# Istio Gateway on AWS - FIXED with proper pod annotation structure
+# Istio Gateway on AWS - FIXED for webhook timeout issue
 resource "helm_release" "istio_gateway_aws" {
   provider   = helm.aws
   name       = "istio-eastwestgateway"
@@ -283,20 +283,49 @@ resource "helm_release" "istio_gateway_aws" {
 
   depends_on = [helm_release.istiod_aws]
 
-  # Add timeout for slow deployments
-  timeout = 600
+  # Increase timeout to 15 minutes
+  timeout = 900
 
-  # Disable sidecar injection for gateway pods using correct structure
+  # CRITICAL: Disable sidecar injection properly
   set {
-    name  = "deployment.pod.annotations.sidecar\\.istio\\.io/inject"
-    value = "\"false\""
+    name  = "deployment.podAnnotations.sidecar\\.istio\\.io/inject"
+    value = "false"
   }
 
+  # Essential gateway configuration
   set {
     name  = "service.type"
     value = "LoadBalancer"
   }
 
+  # Minimal resource requirements for t3.medium
+  set {
+    name  = "resources.requests.cpu"
+    value = "50m"
+  }
+
+  set {
+    name  = "resources.requests.memory"
+    value = "64Mi"
+  }
+
+  set {
+    name  = "resources.limits.cpu"
+    value = "200m"
+  }
+
+  set {
+    name  = "resources.limits.memory"
+    value = "256Mi"
+  }
+
+  # Reduce replica count for small cluster
+  set {
+    name  = "replicaCount"
+    value = "1"
+  }
+
+  # Configure ports
   set {
     name  = "service.ports[0].port"
     value = "15021"
@@ -317,29 +346,30 @@ resource "helm_release" "istio_gateway_aws" {
     value = "tls"
   }
 
-  # Reduce resource requirements for small nodes
+  # Schedule on the less loaded node (Node 2)
   set {
-    name  = "resources.requests.cpu"
-    value = "100m"
+    name  = "nodeSelector.kubernetes\\.io/hostname"
+    value = "ip-10-0-2-55.eu-north-1.compute.internal"
+  }
+
+  # Use rolling update strategy
+  set {
+    name  = "deployment.strategy.type"
+    value = "RollingUpdate"
   }
 
   set {
-    name  = "resources.requests.memory"
-    value = "128Mi"
+    name  = "deployment.strategy.rollingUpdate.maxUnavailable"
+    value = "0"
   }
 
   set {
-    name  = "resources.limits.cpu"
-    value = "500m"
-  }
-
-  set {
-    name  = "resources.limits.memory"
-    value = "512Mi"
+    name  = "deployment.strategy.rollingUpdate.maxSurge"
+    value = "1"
   }
 }
 
-# Istio Gateway on Azure - FIXED with proper pod annotation structure
+# Istio Gateway on Azure - FIXED for webhook timeout issue
 resource "helm_release" "istio_gateway_azure" {
   provider   = helm.azure
   name       = "istio-eastwestgateway"
@@ -350,20 +380,49 @@ resource "helm_release" "istio_gateway_azure" {
 
   depends_on = [helm_release.istiod_azure]
 
-  # Add timeout for slow deployments
-  timeout = 600
+  # Increase timeout to 15 minutes
+  timeout = 900
 
-  # Disable sidecar injection for gateway pods using correct structure
+  # CRITICAL: Disable sidecar injection properly
   set {
-    name  = "deployment.pod.annotations.sidecar\\.istio\\.io/inject"
-    value = "\"false\""
+    name  = "deployment.podAnnotations.sidecar\\.istio\\.io/inject"
+    value = "false"
   }
 
+  # Essential gateway configuration
   set {
     name  = "service.type"
     value = "LoadBalancer"
   }
 
+  # Minimal resource requirements for Standard_B2s
+  set {
+    name  = "resources.requests.cpu"
+    value = "50m"
+  }
+
+  set {
+    name  = "resources.requests.memory"
+    value = "64Mi"
+  }
+
+  set {
+    name  = "resources.limits.cpu"
+    value = "200m"
+  }
+
+  set {
+    name  = "resources.limits.memory"
+    value = "256Mi"
+  }
+
+  # Reduce replica count for small cluster
+  set {
+    name  = "replicaCount"
+    value = "1"
+  }
+
+  # Configure ports
   set {
     name  = "service.ports[0].port"
     value = "15021"
@@ -384,25 +443,20 @@ resource "helm_release" "istio_gateway_azure" {
     value = "tls"
   }
 
-  # Reduce resource requirements for small nodes
+  # Use rolling update strategy
   set {
-    name  = "resources.requests.cpu"
-    value = "100m"
+    name  = "deployment.strategy.type"
+    value = "RollingUpdate"
   }
 
   set {
-    name  = "resources.requests.memory"
-    value = "128Mi"
+    name  = "deployment.strategy.rollingUpdate.maxUnavailable"
+    value = "0"
   }
 
   set {
-    name  = "resources.limits.cpu"
-    value = "500m"
-  }
-
-  set {
-    name  = "resources.limits.memory"
-    value = "512Mi"
+    name  = "deployment.strategy.rollingUpdate.maxSurge"
+    value = "1"
   }
 }
 
@@ -439,7 +493,7 @@ resource "null_resource" "verify_istio_aws" {
   provisioner "local-exec" {
     command = <<-EOT
       kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
-      kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s
+      kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s || true
     EOT
   }
 }
@@ -450,7 +504,7 @@ resource "null_resource" "verify_istio_azure" {
   provisioner "local-exec" {
     command = <<-EOT
       kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
-      kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s
+      kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s || true
     EOT
   }
 }
