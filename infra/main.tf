@@ -38,7 +38,7 @@ module "aws_vpc" {
   }
 }
 
-# AWS EKS Module
+# AWS EKS Module - FIXED VERSION
 module "aws_eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.0"
@@ -47,9 +47,14 @@ module "aws_eks" {
   cluster_version = coalesce(var.aws_cluster_version, var.cluster_version)
 
   vpc_id     = module.aws_vpc.vpc_id
-  subnet_ids = module.aws_vpc.private_subnets
+  subnet_ids = concat(module.aws_vpc.private_subnets, module.aws_vpc.public_subnets)
 
   enable_cluster_creator_admin_permissions = true
+
+  # Configure API server endpoint access
+  cluster_endpoint_private_access = true
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
 
   eks_managed_node_groups = {
     default = {
@@ -59,6 +64,9 @@ module "aws_eks" {
 
       instance_types = [var.aws_node_instance_type]
       capacity_type  = "ON_DEMAND"
+      
+      # Keep nodes in private subnets for security
+      subnet_ids = module.aws_vpc.private_subnets
     }
   }
 
@@ -264,7 +272,7 @@ resource "helm_release" "istiod_azure" {
   }
 }
 
-# Istio Gateway on AWS
+# Istio Gateway on AWS - FIXED with proper pod annotation structure
 resource "helm_release" "istio_gateway_aws" {
   provider   = helm.aws
   name       = "istio-eastwestgateway"
@@ -275,6 +283,15 @@ resource "helm_release" "istio_gateway_aws" {
 
   depends_on = [helm_release.istiod_aws]
 
+  # Add timeout for slow deployments
+  timeout = 600
+
+  # Disable sidecar injection for gateway pods using correct structure
+  set {
+    name  = "deployment.pod.annotations.sidecar\\.istio\\.io/inject"
+    value = "\"false\""
+  }
+
   set {
     name  = "service.type"
     value = "LoadBalancer"
@@ -299,9 +316,30 @@ resource "helm_release" "istio_gateway_aws" {
     name  = "service.ports[1].name"
     value = "tls"
   }
+
+  # Reduce resource requirements for small nodes
+  set {
+    name  = "resources.requests.cpu"
+    value = "100m"
+  }
+
+  set {
+    name  = "resources.requests.memory"
+    value = "128Mi"
+  }
+
+  set {
+    name  = "resources.limits.cpu"
+    value = "500m"
+  }
+
+  set {
+    name  = "resources.limits.memory"
+    value = "512Mi"
+  }
 }
 
-# Istio Gateway on Azure
+# Istio Gateway on Azure - FIXED with proper pod annotation structure
 resource "helm_release" "istio_gateway_azure" {
   provider   = helm.azure
   name       = "istio-eastwestgateway"
@@ -312,6 +350,15 @@ resource "helm_release" "istio_gateway_azure" {
 
   depends_on = [helm_release.istiod_azure]
 
+  # Add timeout for slow deployments
+  timeout = 600
+
+  # Disable sidecar injection for gateway pods using correct structure
+  set {
+    name  = "deployment.pod.annotations.sidecar\\.istio\\.io/inject"
+    value = "\"false\""
+  }
+
   set {
     name  = "service.type"
     value = "LoadBalancer"
@@ -335,6 +382,27 @@ resource "helm_release" "istio_gateway_azure" {
   set {
     name  = "service.ports[1].name"
     value = "tls"
+  }
+
+  # Reduce resource requirements for small nodes
+  set {
+    name  = "resources.requests.cpu"
+    value = "100m"
+  }
+
+  set {
+    name  = "resources.requests.memory"
+    value = "128Mi"
+  }
+
+  set {
+    name  = "resources.limits.cpu"
+    value = "500m"
+  }
+
+  set {
+    name  = "resources.limits.memory"
+    value = "512Mi"
   }
 }
 
@@ -364,12 +432,15 @@ resource "null_resource" "configure_kubectl_azure" {
   }
 }
 
-# Verify Istio installation
+# Verify Istio installation - FIXED with proper dependency and wait
 resource "null_resource" "verify_istio_aws" {
   depends_on = [helm_release.istio_gateway_aws, null_resource.configure_kubectl_aws]
   
   provisioner "local-exec" {
-    command = "kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s"
+    command = <<-EOT
+      kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
+      kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s
+    EOT
   }
 }
 
@@ -377,6 +448,9 @@ resource "null_resource" "verify_istio_azure" {
   depends_on = [helm_release.istio_gateway_azure, null_resource.configure_kubectl_azure]
   
   provisioner "local-exec" {
-    command = "kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s"
+    command = <<-EOT
+      kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
+      kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s
+    EOT
   }
 }
