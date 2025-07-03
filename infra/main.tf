@@ -1,5 +1,5 @@
 # main.tf
-# Multi-cloud Kubernetes infrastructure with Istio service mesh (WITHOUT gateways)
+# Multi-cloud Kubernetes infrastructure with Istio service mesh
 
 # AWS Provider
 provider "aws" {
@@ -38,7 +38,7 @@ module "aws_vpc" {
   }
 }
 
-# AWS EKS Module - FIXED VERSION
+# AWS EKS Module
 module "aws_eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.0"
@@ -51,7 +51,6 @@ module "aws_eks" {
 
   enable_cluster_creator_admin_permissions = true
 
-  # Configure API server endpoint access
   cluster_endpoint_private_access = true
   cluster_endpoint_public_access  = true
   cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
@@ -65,7 +64,6 @@ module "aws_eks" {
       instance_types = [var.aws_node_instance_type]
       capacity_type  = "ON_DEMAND"
       
-      # Keep nodes in private subnets for security
       subnet_ids = module.aws_vpc.private_subnets
     }
   }
@@ -85,7 +83,7 @@ resource "azurerm_resource_group" "main" {
   }
 }
 
-# Azure AKS - Simple direct resource (no module)
+# Azure AKS
 resource "azurerm_kubernetes_cluster" "azure_aks" {
   name                = "multicloud-azure"
   location            = azurerm_resource_group.main.location
@@ -121,7 +119,7 @@ provider "kubernetes" {
   }
 }
 
-# Kubernetes provider for Azure AKS - FIXED
+# Kubernetes provider for Azure AKS
 provider "kubernetes" {
   alias                  = "azure"
   host                   = azurerm_kubernetes_cluster.azure_aks.kube_config.0.host
@@ -145,7 +143,7 @@ provider "helm" {
   }
 }
 
-# Helm provider for Azure AKS - FIXED
+# Helm provider for Azure AKS
 provider "helm" {
   alias = "azure"
   kubernetes {
@@ -272,7 +270,7 @@ resource "helm_release" "istiod_azure" {
   }
 }
 
-# Istio Gateway on AWS - FIXED with proper image configuration
+# Simplified Istio Gateway on AWS
 resource "helm_release" "istio_gateway_aws" {
   provider   = helm.aws
   name       = "istio-eastwestgateway"
@@ -282,76 +280,35 @@ resource "helm_release" "istio_gateway_aws" {
   namespace  = kubernetes_namespace.istio_system_aws.metadata[0].name
 
   depends_on = [helm_release.istiod_aws]
+  timeout    = 900  # 15 minutes
 
-  # Reduced timeout since we know the issue now
-  timeout = 600
+  set {
+    name  = "service.type"
+    value = "LoadBalancer"
+  }
 
-  # Use values block for cleaner configuration
-  values = [
-    yamlencode({
-      # Essential service configuration
-      service = {
-        type = "LoadBalancer"
-        ports = [
-          {
-            port = 15021
-            name = "status-port"
-          },
-          {
-            port = 15443
-            name = "tls"
-          }
-        ]
-      }
+  set {
+    name  = "service.ports[0].port"
+    value = "15443"
+  }
 
-      # Fix image pull issues - use Google Container Registry
-      image = {
-        registry = "gcr.io/istio-release"
-        tag = "1.26.2"
-      }
+  set {
+    name  = "service.ports[0].name"
+    value = "tls"
+  }
 
-      # Disable sidecar injection explicitly
-      podAnnotations = {
-        "sidecar.istio.io/inject" = "false"
-      }
+  set {
+    name  = "service.ports[1].port"
+    value = "15021"
+  }
 
-      # Conservative resource requests for t3.medium
-      resources = {
-        requests = {
-          cpu = "50m"
-          memory = "64Mi"
-        }
-        limits = {
-          cpu = "200m"
-          memory = "256Mi"
-        }
-      }
-
-      # Single replica for small cluster
-      replicaCount = 1
-
-      # Rolling update strategy
-      strategy = {
-        type = "RollingUpdate"
-        rollingUpdate = {
-          maxUnavailable = 0
-          maxSurge = 1
-        }
-      }
-
-      # Add image pull policy
-      imagePullPolicy = "IfNotPresent"
-
-      # Global Istio configuration
-      global = {
-        meshID = "mesh1"
-        network = "aws-network"
-      }
-    })
-  ]
+  set {
+    name  = "service.ports[1].name"
+    value = "status-port"
+  }
 }
 
-# Istio Gateway on Azure - FIXED with proper image configuration  
+# Simplified Istio Gateway on Azure
 resource "helm_release" "istio_gateway_azure" {
   provider   = helm.azure
   name       = "istio-eastwestgateway"
@@ -361,64 +318,32 @@ resource "helm_release" "istio_gateway_azure" {
   namespace  = kubernetes_namespace.istio_system_azure.metadata[0].name
 
   depends_on = [helm_release.istiod_azure]
+  timeout    = 900  # 15 minutes
 
-  timeout = 600
+  set {
+    name  = "service.type"
+    value = "LoadBalancer"
+  }
 
-  values = [
-    yamlencode({
-      service = {
-        type = "LoadBalancer"
-        ports = [
-          {
-            port = 15021
-            name = "status-port"
-          },
-          {
-            port = 15443
-            name = "tls"
-          }
-        ]
-      }
+  set {
+    name  = "service.ports[0].port"
+    value = "15443"
+  }
 
-      # Fix image pull issues - use Google Container Registry
-      image = {
-        registry = "gcr.io/istio-release"
-        tag = "1.26.2"
-      }
+  set {
+    name  = "service.ports[0].name"
+    value = "tls"
+  }
 
-      podAnnotations = {
-        "sidecar.istio.io/inject" = "false"
-      }
+  set {
+    name  = "service.ports[1].port"
+    value = "15021"
+  }
 
-      resources = {
-        requests = {
-          cpu = "50m"
-          memory = "64Mi"
-        }
-        limits = {
-          cpu = "200m"
-          memory = "256Mi"
-        }
-      }
-
-      replicaCount = 1
-
-      strategy = {
-        type = "RollingUpdate"
-        rollingUpdate = {
-          maxUnavailable = 0
-          maxSurge = 1
-        }
-      }
-
-      imagePullPolicy = "IfNotPresent"
-
-      global = {
-        meshID = "mesh1"
-        network = "azure-network"
-      }
-    })
-  ]
+  set {
+    name  = "service.ports[1].name"
+    value = "status-port"
+  }
 }
 
 # Configure kubectl contexts automatically
@@ -434,7 +359,6 @@ resource "null_resource" "configure_kubectl_aws" {
   }
 }
 
-# Configure kubectl contexts automatically - FIXED
 resource "null_resource" "configure_kubectl_azure" {
   depends_on = [azurerm_kubernetes_cluster.azure_aks]
   
@@ -447,15 +371,12 @@ resource "null_resource" "configure_kubectl_azure" {
   }
 }
 
-# Verify Istio installation - With gateway verification
+# Verify Istio installation
 resource "null_resource" "verify_istio_aws" {
   depends_on = [helm_release.istio_gateway_aws, null_resource.configure_kubectl_aws]
   
   provisioner "local-exec" {
-    command = <<-EOT
-      kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
-      kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s || true
-    EOT
+    command = "kubectl --context=aws-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s"
   }
 }
 
@@ -463,9 +384,6 @@ resource "null_resource" "verify_istio_azure" {
   depends_on = [helm_release.istio_gateway_azure, null_resource.configure_kubectl_azure]
   
   provisioner "local-exec" {
-    command = <<-EOT
-      kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
-      kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istio-proxy -n istio-system --timeout=300s || true
-    EOT
+    command = "kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s"
   }
 }

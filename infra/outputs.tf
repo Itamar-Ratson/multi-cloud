@@ -18,7 +18,7 @@ output "aws_cluster_version" {
   value       = module.aws_eks.cluster_version
 }
 
-# Azure AKS Outputs - FIXED
+# Azure AKS Outputs
 output "azure_cluster_endpoint" {
   description = "Azure AKS cluster endpoint"
   value       = azurerm_kubernetes_cluster.azure_aks.kube_config.0.host
@@ -35,7 +35,7 @@ output "azure_resource_group_name" {
   value       = azurerm_resource_group.main.name
 }
 
-# Kubectl Commands - FIXED
+# Kubectl Commands
 output "kubectl_commands" {
   description = "Useful kubectl commands for managing clusters"
   value = {
