@@ -1,27 +1,10 @@
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 3.0"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
-    }
-  }
-}
+# main.tf
+# Multi-cloud Kubernetes infrastructure with Istio service mesh
+# FIXED: Correct Azure AKS module output attributes
 
 # AWS Provider
 provider "aws" {
-  region = "eu-north-1"
+  region = var.aws_region
 }
 
 # Azure Provider
@@ -46,52 +29,52 @@ module "aws_vpc" {
   private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
   public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
 
-  enable_nat_gateway = true
-  enable_vpn_gateway = false
+  enable_nat_gateway   = true
+  enable_vpn_gateway   = false
   enable_dns_hostnames = true
-  enable_dns_support = true
+  enable_dns_support   = true
 
   tags = {
-    Environment = "multicloud"
+    Environment = var.environment
   }
 }
 
 # AWS EKS Module
 module "aws_eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.0"
+  version = "~> 20.0"
 
   cluster_name    = "multicloud-aws"
-  cluster_version = "1.27"
+  cluster_version = coalesce(var.aws_cluster_version, var.cluster_version)
 
   vpc_id     = module.aws_vpc.vpc_id
   subnet_ids = module.aws_vpc.private_subnets
 
-  manage_aws_auth_configmap = true
+  enable_cluster_creator_admin_permissions = true
 
   eks_managed_node_groups = {
     default = {
       min_size     = 1
       max_size     = 3
-      desired_size = 2
+      desired_size = var.node_count
 
-      instance_types = ["t3.medium"]
+      instance_types = [var.aws_node_instance_type]
       capacity_type  = "ON_DEMAND"
     }
   }
 
   tags = {
-    Environment = "multicloud"
+    Environment = var.environment
   }
 }
 
 # Azure Resource Group
 resource "azurerm_resource_group" "main" {
   name     = "multicloud-rg"
-  location = "North Europe"
+  location = var.azure_location
 
   tags = {
-    Environment = "multicloud"
+    Environment = var.environment
   }
 }
 
@@ -104,24 +87,24 @@ module "azure_aks" {
   location           = azurerm_resource_group.main.location
   cluster_name       = "multicloud-azure"
 
-  kubernetes_version = "1.27"
-  orchestrator_version = "1.27"
+  kubernetes_version   = coalesce(var.azure_cluster_version, var.cluster_version)
+  orchestrator_version = coalesce(var.azure_cluster_version, var.cluster_version)
 
-  default_node_pool = {
-    name                = "default"
-    node_count          = 2
-    vm_size            = "Standard_B2s"
-    enable_auto_scaling = false
-  }
+  # Default node pool configuration using agents_* parameters
+  agents_count     = var.node_count
+  agents_size      = var.azure_node_vm_size
+  agents_pool_name = "default"
+  
+  enable_auto_scaling = false
 
   tags = {
-    Environment = "multicloud"
+    Environment = var.environment
   }
 }
 
 # Kubernetes provider for AWS EKS
 provider "kubernetes" {
-  alias = "aws"
+  alias                  = "aws"
   host                   = module.aws_eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.aws_eks.cluster_certificate_authority_data)
   
@@ -132,13 +115,13 @@ provider "kubernetes" {
   }
 }
 
-# Kubernetes provider for Azure AKS
+# Kubernetes provider for Azure AKS - FIXED
 provider "kubernetes" {
-  alias = "azure"
-  host                   = module.azure_aks.kube_config.0.host
-  cluster_ca_certificate = base64decode(module.azure_aks.kube_config.0.cluster_ca_certificate)
-  client_certificate     = base64decode(module.azure_aks.kube_config.0.client_certificate)
-  client_key            = base64decode(module.azure_aks.kube_config.0.client_key)
+  alias                  = "azure"
+  host                   = module.azure_aks.host
+  cluster_ca_certificate = base64decode(module.azure_aks.cluster_ca_certificate)
+  client_certificate     = base64decode(module.azure_aks.client_certificate)
+  client_key             = base64decode(module.azure_aks.client_key)
 }
 
 # Helm provider for AWS EKS
@@ -156,14 +139,14 @@ provider "helm" {
   }
 }
 
-# Helm provider for Azure AKS
+# Helm provider for Azure AKS - FIXED
 provider "helm" {
   alias = "azure"
   kubernetes {
-    host                   = module.azure_aks.kube_config.0.host
-    cluster_ca_certificate = base64decode(module.azure_aks.kube_config.0.cluster_ca_certificate)
-    client_certificate     = base64decode(module.azure_aks.kube_config.0.client_certificate)
-    client_key            = base64decode(module.azure_aks.kube_config.0.client_key)
+    host                   = module.azure_aks.host
+    cluster_ca_certificate = base64decode(module.azure_aks.cluster_ca_certificate)
+    client_certificate     = base64decode(module.azure_aks.client_certificate)
+    client_key             = base64decode(module.azure_aks.client_key)
   }
 }
 
@@ -173,7 +156,7 @@ resource "kubernetes_namespace" "istio_system_aws" {
   metadata {
     name = "istio-system"
     labels = {
-      topology.istio.io/network = "aws-network"
+      "topology.istio.io/network" = "aws-network"
     }
   }
 }
@@ -184,7 +167,7 @@ resource "kubernetes_namespace" "istio_system_azure" {
   metadata {
     name = "istio-system"
     labels = {
-      topology.istio.io/network = "azure-network"
+      "topology.istio.io/network" = "azure-network"
     }
   }
 }
@@ -195,7 +178,7 @@ resource "helm_release" "istio_base_aws" {
   name       = "istio-base"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "base"
-  version    = "1.19.0"
+  version    = "1.26.2"
   namespace  = kubernetes_namespace.istio_system_aws.metadata[0].name
 
   set {
@@ -215,7 +198,7 @@ resource "helm_release" "istio_base_azure" {
   name       = "istio-base"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "base"
-  version    = "1.19.0"
+  version    = "1.26.2"
   namespace  = kubernetes_namespace.istio_system_azure.metadata[0].name
 
   set {
@@ -235,7 +218,7 @@ resource "helm_release" "istiod_aws" {
   name       = "istiod"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "istiod"
-  version    = "1.19.0"
+  version    = "1.26.2"
   namespace  = kubernetes_namespace.istio_system_aws.metadata[0].name
 
   depends_on = [helm_release.istio_base_aws]
@@ -262,7 +245,7 @@ resource "helm_release" "istiod_azure" {
   name       = "istiod"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "istiod"
-  version    = "1.19.0"
+  version    = "1.26.2"
   namespace  = kubernetes_namespace.istio_system_azure.metadata[0].name
 
   depends_on = [helm_release.istio_base_azure]
@@ -289,7 +272,7 @@ resource "helm_release" "istio_gateway_aws" {
   name       = "istio-eastwestgateway"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "gateway"
-  version    = "1.19.0"
+  version    = "1.26.2"
   namespace  = kubernetes_namespace.istio_system_aws.metadata[0].name
 
   depends_on = [helm_release.istiod_aws]
@@ -326,7 +309,7 @@ resource "helm_release" "istio_gateway_azure" {
   name       = "istio-eastwestgateway"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "gateway"
-  version    = "1.19.0"
+  version    = "1.26.2"
   namespace  = kubernetes_namespace.istio_system_azure.metadata[0].name
 
   depends_on = [helm_release.istiod_azure]
@@ -370,15 +353,16 @@ resource "null_resource" "configure_kubectl_aws" {
   }
 }
 
+# Configure kubectl contexts automatically - FIXED
 resource "null_resource" "configure_kubectl_azure" {
   depends_on = [module.azure_aks]
   
   provisioner "local-exec" {
-    command = "az aks get-credentials --resource-group ${azurerm_resource_group.main.name} --name ${module.azure_aks.cluster_name} --context azure-cluster --overwrite-existing"
+    command = "az aks get-credentials --resource-group ${azurerm_resource_group.main.name} --name ${module.azure_aks.aks_name} --context azure-cluster --overwrite-existing"
   }
   
   triggers = {
-    cluster_name = module.azure_aks.cluster_name
+    cluster_name = module.azure_aks.aks_name
   }
 }
 
@@ -396,30 +380,5 @@ resource "null_resource" "verify_istio_azure" {
   
   provisioner "local-exec" {
     command = "kubectl --context=azure-cluster wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s"
-  }
-}
-
-# Outputs
-output "aws_cluster_endpoint" {
-  value = module.aws_eks.cluster_endpoint
-}
-
-output "aws_cluster_name" {
-  value = module.aws_eks.cluster_name
-}
-
-output "azure_cluster_endpoint" {
-  value = module.azure_aks.kube_config.0.host
-}
-
-output "azure_cluster_name" {
-  value = module.azure_aks.cluster_name
-}
-
-output "kubectl_commands" {
-  value = {
-    aws_context   = "kubectl config use-context aws-cluster"
-    azure_context = "kubectl config use-context azure-cluster"
-    verify_istio  = "kubectl --context=aws-cluster get pods -n istio-system && kubectl --context=azure-cluster get pods -n istio-system"
   }
 }
