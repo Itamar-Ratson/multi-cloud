@@ -1,5 +1,5 @@
 # main.tf
-# Multi-cloud Kubernetes infrastructure with Istio service mesh
+# Multi-cloud Kubernetes infrastructure with Istio service mesh (WITHOUT gateways)
 
 # AWS Provider
 provider "aws" {
@@ -272,7 +272,7 @@ resource "helm_release" "istiod_azure" {
   }
 }
 
-# Istio Gateway on AWS - FIXED for webhook timeout issue
+# Istio Gateway on AWS - FIXED with proper image configuration
 resource "helm_release" "istio_gateway_aws" {
   provider   = helm.aws
   name       = "istio-eastwestgateway"
@@ -283,93 +283,75 @@ resource "helm_release" "istio_gateway_aws" {
 
   depends_on = [helm_release.istiod_aws]
 
-  # Increase timeout to 15 minutes
-  timeout = 900
+  # Reduced timeout since we know the issue now
+  timeout = 600
 
-  # CRITICAL: Disable sidecar injection properly
-  set {
-    name  = "deployment.podAnnotations.sidecar\\.istio\\.io/inject"
-    value = "false"
-  }
+  # Use values block for cleaner configuration
+  values = [
+    yamlencode({
+      # Essential service configuration
+      service = {
+        type = "LoadBalancer"
+        ports = [
+          {
+            port = 15021
+            name = "status-port"
+          },
+          {
+            port = 15443
+            name = "tls"
+          }
+        ]
+      }
 
-  # Essential gateway configuration
-  set {
-    name  = "service.type"
-    value = "LoadBalancer"
-  }
+      # Fix image pull issues - use Google Container Registry
+      image = {
+        registry = "gcr.io/istio-release"
+        tag = "1.26.2"
+      }
 
-  # Minimal resource requirements for t3.medium
-  set {
-    name  = "resources.requests.cpu"
-    value = "50m"
-  }
+      # Disable sidecar injection explicitly
+      podAnnotations = {
+        "sidecar.istio.io/inject" = "false"
+      }
 
-  set {
-    name  = "resources.requests.memory"
-    value = "64Mi"
-  }
+      # Conservative resource requests for t3.medium
+      resources = {
+        requests = {
+          cpu = "50m"
+          memory = "64Mi"
+        }
+        limits = {
+          cpu = "200m"
+          memory = "256Mi"
+        }
+      }
 
-  set {
-    name  = "resources.limits.cpu"
-    value = "200m"
-  }
+      # Single replica for small cluster
+      replicaCount = 1
 
-  set {
-    name  = "resources.limits.memory"
-    value = "256Mi"
-  }
+      # Rolling update strategy
+      strategy = {
+        type = "RollingUpdate"
+        rollingUpdate = {
+          maxUnavailable = 0
+          maxSurge = 1
+        }
+      }
 
-  # Reduce replica count for small cluster
-  set {
-    name  = "replicaCount"
-    value = "1"
-  }
+      # Add image pull policy
+      imagePullPolicy = "IfNotPresent"
 
-  # Configure ports
-  set {
-    name  = "service.ports[0].port"
-    value = "15021"
-  }
-
-  set {
-    name  = "service.ports[0].name"
-    value = "status-port"
-  }
-
-  set {
-    name  = "service.ports[1].port"
-    value = "15443"
-  }
-
-  set {
-    name  = "service.ports[1].name"
-    value = "tls"
-  }
-
-  # Schedule on the less loaded node (Node 2)
-  set {
-    name  = "nodeSelector.kubernetes\\.io/hostname"
-    value = "ip-10-0-2-55.eu-north-1.compute.internal"
-  }
-
-  # Use rolling update strategy
-  set {
-    name  = "deployment.strategy.type"
-    value = "RollingUpdate"
-  }
-
-  set {
-    name  = "deployment.strategy.rollingUpdate.maxUnavailable"
-    value = "0"
-  }
-
-  set {
-    name  = "deployment.strategy.rollingUpdate.maxSurge"
-    value = "1"
-  }
+      # Global Istio configuration
+      global = {
+        meshID = "mesh1"
+        network = "aws-network"
+      }
+    })
+  ]
 }
 
-# Istio Gateway on Azure - FIXED for webhook timeout issue
+# Istio Gateway on Azure - FIXED with proper image configuration  
 resource "helm_release" "istio_gateway_azure" {
   provider   = helm.azure
   name       = "istio-eastwestgateway"
@@ -380,84 +362,63 @@ resource "helm_release" "istio_gateway_azure" {
 
   depends_on = [helm_release.istiod_azure]
 
-  # Increase timeout to 15 minutes
-  timeout = 900
+  timeout = 600
 
-  # CRITICAL: Disable sidecar injection properly
-  set {
-    name  = "deployment.podAnnotations.sidecar\\.istio\\.io/inject"
-    value = "false"
-  }
+  values = [
+    yamlencode({
+      service = {
+        type = "LoadBalancer"
+        ports = [
+          {
+            port = 15021
+            name = "status-port"
+          },
+          {
+            port = 15443
+            name = "tls"
+          }
+        ]
+      }
 
-  # Essential gateway configuration
-  set {
-    name  = "service.type"
-    value = "LoadBalancer"
-  }
+      # Fix image pull issues - use Google Container Registry
+      image = {
+        registry = "gcr.io/istio-release"
+        tag = "1.26.2"
+      }
 
-  # Minimal resource requirements for Standard_B2s
-  set {
-    name  = "resources.requests.cpu"
-    value = "50m"
-  }
+      podAnnotations = {
+        "sidecar.istio.io/inject" = "false"
+      }
 
-  set {
-    name  = "resources.requests.memory"
-    value = "64Mi"
-  }
+      resources = {
+        requests = {
+          cpu = "50m"
+          memory = "64Mi"
+        }
+        limits = {
+          cpu = "200m"
+          memory = "256Mi"
+        }
+      }
 
-  set {
-    name  = "resources.limits.cpu"
-    value = "200m"
-  }
+      replicaCount = 1
 
-  set {
-    name  = "resources.limits.memory"
-    value = "256Mi"
-  }
+      strategy = {
+        type = "RollingUpdate"
+        rollingUpdate = {
+          maxUnavailable = 0
+          maxSurge = 1
+        }
+      }
 
-  # Reduce replica count for small cluster
-  set {
-    name  = "replicaCount"
-    value = "1"
-  }
+      imagePullPolicy = "IfNotPresent"
 
-  # Configure ports
-  set {
-    name  = "service.ports[0].port"
-    value = "15021"
-  }
-
-  set {
-    name  = "service.ports[0].name"
-    value = "status-port"
-  }
-
-  set {
-    name  = "service.ports[1].port"
-    value = "15443"
-  }
-
-  set {
-    name  = "service.ports[1].name"
-    value = "tls"
-  }
-
-  # Use rolling update strategy
-  set {
-    name  = "deployment.strategy.type"
-    value = "RollingUpdate"
-  }
-
-  set {
-    name  = "deployment.strategy.rollingUpdate.maxUnavailable"
-    value = "0"
-  }
-
-  set {
-    name  = "deployment.strategy.rollingUpdate.maxSurge"
-    value = "1"
-  }
+      global = {
+        meshID = "mesh1"
+        network = "azure-network"
+      }
+    })
+  ]
 }
 
 # Configure kubectl contexts automatically
@@ -486,7 +447,7 @@ resource "null_resource" "configure_kubectl_azure" {
   }
 }
 
-# Verify Istio installation - FIXED with proper dependency and wait
+# Verify Istio installation - With gateway verification
 resource "null_resource" "verify_istio_aws" {
   depends_on = [helm_release.istio_gateway_aws, null_resource.configure_kubectl_aws]
   
